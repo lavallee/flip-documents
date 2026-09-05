@@ -1,0 +1,21 @@
+id = "document-evidence"
+version = "0.1"
+summary = "Capture original document bytes before reading a derivative."
+entry = "capture"
+
+[[phase]]
+id = "capture"
+guide = "Capture the source URL through the documents lane. Confirm the expected document, original format, URL, hash and date."
+produces = ["original-document"]
+next = "derive"
+
+[[phase]]
+id = "derive"
+guide = "Use flip extract with a named method when text is needed. Keep the original; failed or thin conversion requires inspection."
+produces = ["logged-derivative"]
+next = "judge"
+
+[[phase]]
+id = "judge"
+guide = "Check quotations and numerical claims against original pages or cells. Grade the source and record extraction limitations before citation."
+produces = ["source-judgment"]

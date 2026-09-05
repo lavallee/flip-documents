@@ -1,0 +1,13 @@
+[plugin]
+id = "lavallee/document-evidence"
+version = "0.1.0"
+summary = "Preserve document originals and judge explicit reading derivatives."
+license = "MIT"
+requires_flip = ">=0.22"
+capabilities = ["definitions"]
+
+[exports]
+workflows = ["workflows/document-evidence.toml"]
+skills = ["skills/document-evidence/SKILL.md"]
+examples = ["examples/"]
+docs = ["README.md"]
