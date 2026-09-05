@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 USER_AGENT = f"flip-documents/{VERSION}"
 TYPES = {
     "application/pdf": ".pdf",
@@ -173,12 +173,109 @@ def extract(src: Path, out: Path) -> dict:
     }
 
 
+def cells(src: Path, out: Path) -> dict:
+    """Read workbook cells through openpyxl without pandas type inference."""
+    if src.resolve() == out.resolve() or out.exists():
+        raise ValueError("output must be new and distinct from the original")
+    if src.suffix.lower() != ".xlsx":
+        raise ValueError("cell extraction supports XLSX only")
+    try:
+        from openpyxl import load_workbook
+    except ImportError as exc:
+        raise ValueError(
+            'install spreadsheet support: pip install "flip-documents[markitdown]"'
+        ) from exc
+    source_hash = hashlib.sha256(src.read_bytes()).hexdigest()
+    workbook = load_workbook(src, read_only=True, data_only=False, keep_links=False)
+    cached = None
+    sheets = []
+    formulas = 0
+    try:
+        cached = load_workbook(src, read_only=True, data_only=True, keep_links=False)
+        for sheet in workbook:
+            if sheet.max_row is None or sheet.max_column is None:
+                raise ValueError(
+                    "worksheet has no declared dimensions; inspect it in a spreadsheet tool"
+                )
+            if sheet.max_row * sheet.max_column > 1_000_000:
+                raise ValueError("worksheet declared range exceeds 1,000,000 cells")
+            records = []
+            for row, cached_row in zip(
+                sheet.iter_rows(), cached[sheet.title].iter_rows(), strict=True
+            ):
+                for cell, cached_cell in zip(row, cached_row, strict=True):
+                    if cell.value is None:
+                        continue
+                    record = {
+                        "coordinate": cell.coordinate,
+                        "data_type": cell.data_type,
+                        "value": cell.value,
+                        "number_format": cell.number_format,
+                    }
+                    if cell.data_type == "f":
+                        formulas += 1
+                        record["cached_value"] = cached_cell.value
+                        record["cache_status"] = (
+                            "present"
+                            if cached_cell.value is not None
+                            else "unavailable-or-blank"
+                        )
+                    records.append(record)
+            sheets.append(
+                {"name": sheet.title, "state": sheet.sheet_state, "cells": records}
+            )
+    finally:
+        workbook.close()
+        if cached is not None:
+            cached.close()
+    if hashlib.sha256(src.read_bytes()).hexdigest() != source_hash:
+        raise ValueError("original changed during extraction; no derivative written")
+    backend_version = importlib.metadata.version("openpyxl")
+    artifact = {
+        "schema": "flip.documents-cells/1",
+        "input_sha256": source_hash,
+        "tool": "openpyxl",
+        "version": backend_version,
+        "sheets": sheets,
+        "limitations": [
+            "Formulas are not evaluated; cached values may be stale or unavailable.",
+            "Dates and times use ISO text; number_format retains display instructions.",
+            "Numbers are decoded Python integers/floats, not exact XML decimal text.",
+            "Blank cells are omitted; coordinates preserve gaps. Styles, merged ranges, charts and comments are not exported.",
+        ],
+    }
+
+    # openpyxl decodes Excel date/time values; retain their ISO representation.
+    def encode(value):
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        raise TypeError(f"unsupported cell value type: {type(value).__name__}")
+
+    text = json.dumps(artifact, indent=2, ensure_ascii=False, default=encode) + "\n"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("x", encoding="utf-8") as output:
+        output.write(text)
+    return {
+        "schema": "flip.documents-extraction/1",
+        "tool": "openpyxl",
+        "version": backend_version,
+        "method": "structured",
+        "input_sha256": source_hash,
+        "output_sha256": hashlib.sha256(out.read_bytes()).hexdigest(),
+        "formulas": formulas,
+    }
+
+
 def version() -> str:
     try:
         backend = importlib.metadata.version("markitdown")
     except importlib.metadata.PackageNotFoundError:
         backend = "not-installed"
-    return f"flip-documents {VERSION}; markitdown {backend}"
+    try:
+        spreadsheet = importlib.metadata.version("openpyxl")
+    except importlib.metadata.PackageNotFoundError:
+        spreadsheet = "not-installed"
+    return f"flip-documents {VERSION}; markitdown {backend}; openpyxl {spreadsheet}"
 
 
 def plugin_path() -> Path:
@@ -207,17 +304,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     derive.add_argument("src", type=Path)
     derive.add_argument("out", type=Path)
+    spreadsheet = commands.add_parser(
+        "cells", help="preserve XLSX coordinates, types, formulas and caches as JSON"
+    )
+    spreadsheet.add_argument("src", type=Path)
+    spreadsheet.add_argument("out", type=Path)
     args = parser.parse_args(argv)
     if args.plugin_path:
         print(plugin_path())
         return 0
     if args.command is None:
-        parser.error("choose capture or extract")
+        parser.error("choose capture, extract or cells")
     try:
         result = (
             capture(args.url, args.dest, max_bytes=args.max_bytes, timeout=args.timeout)
             if args.command == "capture"
-            else extract(args.src, args.out)
+            else (
+                cells(args.src, args.out)
+                if args.command == "cells"
+                else extract(args.src, args.out)
+            )
         )
         print(json.dumps(result, ensure_ascii=False))
         return 0

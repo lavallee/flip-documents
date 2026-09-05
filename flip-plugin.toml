@@ -1,6 +1,6 @@
 [plugin]
 id = "lavallee/document-evidence"
-version = "0.1.0"
+version = "0.2.0"
 summary = "Preserve document originals and judge explicit reading derivatives."
 license = "MIT"
 requires_flip = ">=0.22"
